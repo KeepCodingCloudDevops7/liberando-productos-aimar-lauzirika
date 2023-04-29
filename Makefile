@@ -5,7 +5,7 @@ PIP		= $(VENV)/bin/pip
 # Variables used to configure
 IMAGE_REGISTRY_DOCKERHUB 	?= aimarlauzirika
 IMAGE_REGISTRY_GHCR			?= ghcr.io
-IMAGE_REPO					= KeepCodingCloudDevops7
+IMAGE_REPO					= keepcodingclouddevops7
 IMAGE_NAME					?= liberando-productos-aimar-lauzirika
 VERSION						?= develop
 
