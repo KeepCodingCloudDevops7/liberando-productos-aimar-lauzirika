@@ -3,10 +3,10 @@ PYTHON 	= $(VENV)/bin/python3
 PIP		= $(VENV)/bin/pip
 
 # Variables used to configure
-IMAGE_REGISTRY_DOCKERHUB 	?= xoanmallon
+IMAGE_REGISTRY_DOCKERHUB 	?= aimarlauzirika
 IMAGE_REGISTRY_GHCR			?= ghcr.io
 IMAGE_REPO					= keepcodingclouddevops6
-IMAGE_NAME					?= kc-7-liberando-productos-practica-final
+IMAGE_NAME					?= liberando-productos-aimar-lauzirika
 VERSION						?= develop
 
 # Variables used to configure docker images registries to build and push
