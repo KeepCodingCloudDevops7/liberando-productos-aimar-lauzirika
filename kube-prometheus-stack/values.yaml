@@ -106,7 +106,7 @@ alertmanager:
     - name: 'null'
     - name: 'slack'
       slack_configs:
-      - api_url: 'https://hooks.slack.com/services/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' # <--- AÑADIR EN ESTA LÍNEA EL WEBHOOK CREADO
+      - api_url: 'https://hooks.slack.com/services/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' # <--- AÑADIR EN ESTA LÍNEA EL WEBHOOK CREADO
         send_resolved: true
         channel: '#aimar-lauzirika-prometheus-alarms' # <--- AÑADIR EN ESTA LÍNEA EL CANAL
         title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] Monitoring Event Notification'
@@ -138,12 +138,12 @@ additionalPrometheusRulesMap:
           #     summary: MongoDB Down (instance {{ $labels.instance }})
           #     description: "MongoDB instance is down"
 
-          - alert: simpleServerConsumingMoreThanLimit
+          - alert: fastApiConsumingMoreThanRequest
             expr: avg(container_cpu_cfs_throttled_seconds_total{container="fast-api-webapp"}) by (pod) > 1
             for: 0m
             labels:
               severity: critical
-              alertname: "simple-server container is consuming more than limit cpu"
+              alertname: "fast-api container is consuming more than limit cpu"
             annotations:
               summary: Pod {{ $labels.pod }} consuming more than limit
               description: "Pod more less than request"

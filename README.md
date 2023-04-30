@@ -1,252 +1,171 @@
-# keepcoding-devops-liberando-productos-practica-final
+# PRÁCTICA DEL MÓDULO LIBERANDO PRODUCTOS - SRE
+### Autor: Aimar Lauzirika
+
+
+## El Proyecto
+
+Se trata de un servidor web muy sencillo que dispone de 3 endpoints: `/`, `/health` y `/bye` y devuelven un json. También dispone de test unitarios que cubren más del 80% del codigo que es el requerido.
+
+## Pipelines
+
+Tiene dos pipelines que se ejecutan automáticamente:
+
+- Test: Cada vez que el repositorio de GitHub se actualiza se ejecuta el pipeline `./.github/workflows/test.yaml`, que realiza los test unitarios del código.
+- Release: Este pipeline consiste en construir la imagen de la app y después subirlo repositorios remotos. Para que se ejecute este pipeline debemos asignar tags a nuestro repositorio. Esto lo conseguiremos si después de asignar un tag al commit con `git tag "v.1.0.1"` lo subimos con `git push --tags`.
+
+## Requisitos
 
-## Objetivo
+- docker
+- docker compose
+- minikube
+- kubectl
+- helm
 
-El objetivo es mejorar un proyecto creado previamente para ponerlo en producción, a través de la adicción de una serie de mejoras.
+## Construyendo el entorno
 
-## Proyecto inicial
+### Slack
 
-El proyecto inicial es un servidor que realiza lo siguiente:
+Utilizaremos slack para recibir las alertas configuradas. Para ello, crearemos un espacio de trabajo en slack y dentro se crea un canal, por donde recibiremos las alertas.
 
-- Utiliza [FastAPI](https://fastapi.tiangolo.com/) para levantar un servidor en el puerto `8081` e implementa inicialmente dos endpoints:
-  - `/`: Devuelve en formato `JSON` como respuesta `{"health": "ok"}` y un status code 200.
-  - `/health`: Devuelve en formato `JSON` como respuesta `{"message":"Hello World"}` y un status code 200.
+Además, en slack añadiremos una aplicación llamada `incoming-webhook`, que lo asignaremos al canal recién creado y anotaremos la url que nos indica.
 
-- Se han implementado tests unitarios para el servidor [FastAPI](https://fastapi.tiangolo.com/)
+Ahora editaremos el archivo `./kube-prometheus-stack/values.yaml` con dos cambios. En la línea 109 debemos completar el campo `api_url:` con la url que anotamos anteriormente de slack entre comillas simples. Y por otro lado, dos líneas más abajo, en el campo `channel:` pondremos el nombre del canal de slack que habiamos asignado a `incoming-webhook` empezando con el caracter almohadilla.
 
-- Utiliza [prometheus-client](https://github.com/prometheus/client_python) para arrancar un servidor de métricas en el puerto `8000` y poder registrar métricas, siendo inicialmente las siguientes:
-  - `Counter('server_requests_total', 'Total number of requests to this webserver')`: Contador que se incrementará cada vez que se haga una llamada a alguno de los endpoints implementados por el servidor (inicialmente `/` y `/health`)
-  - `Counter('healthcheck_requests_total', 'Total number of requests to healthcheck')`: Contador que se incrementará cada vez que se haga una llamada al endpoint `/health`.
-  - `Counter('main_requests_total', 'Total number of requests to main endpoint')`: Contador que se incrementará cada vez que se haga una llamada al endpoint `/`.
+```yaml
+. . .
+alertmanager:
+    config:
+        global:
+        resolve_timeout: 5m
+        route:
+        group_by: ['job']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 12h
+        receiver: 'slack'
+        routes:
+        - match:
+            alertname: Watchdog
+            receiver: 'null'
+        # This inhibt rule is a hack from: https://stackoverflow.com/questions/54806336/how-to-silence-prometheus-alertmanager-using-config-files/54814033#54814033
+        inhibit_rules:
+        - target_match_re:
+            alertname: '.+Overcommit'
+            source_match:
+            alertname: 'Watchdog'
+            equal: ['prometheus']
+        receivers:
+        - name: 'null'
+        - name: 'slack'
+        slack_configs:
+        - api_url: 'https://hooks.slack.com/services/YOUR_SLACK_WEBHOOK_HERE' # <--- AÑADIR EN ESTA LÍNEA EL WEBHOOK CREADO
+            send_resolved: true
+            channel: '#notif-channel' # <--- AÑADIR EN ESTA LÍNEA EL CANAL
+. . .
+```
+
+
+### Minikube
 
-## Software necesario
+Crearemos un perfil de minikube para este proyecto:
+```
+minikube start --kubernetes-version='v1.21.1' \
+    --memory=4096 \
+    --addons="metrics-server,default-storageclass,storage-provisioner" \
+    -p monitoring-demo
+```
+
+#### Prometheus stack
+
+Instalaremos los elementos necesarios para la monitorización con helm:
+```
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+```
+
+```
+helm -n monitoring upgrade --install prometheus prometheus-community/kube-prometheus-stack -f kube-prometheus-stack/values.yaml --create-namespace --wait --version 34.1.1
+```
+
+## Instalar la aplicación
+
+```
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+```
+
+```
+helm dep up fast-api-webapp
+helm -n fast-api upgrade my-app --wait --install --create-namespace fast-api-webapp
+```
 
-Es necesario disponer del siguiente software:
+Port-forward de los servicios:
+```
+kubectl -n monitoring port-forward svc/prometheus-grafana 3000:http-web
+kubectl -n monitoring port-forward svc/prometheus-kube-prometheus-prometheus 9090:9090
+kubectl -n fast-api port-forward svc/my-app-fast-api-webapp 8081:8081
+```
 
-- `Python` en versión `3.8.5` o superior, disponible para los diferentes sistemas operativos en la [página oficial de descargas](https://www.python.org/downloads/release/python-385/)
+## Monitorización
 
-- `virtualenv` para poder instalar las librerías necesarias de Python, se puede instalar a través del siguiente comando:
+Ya podemos acceder a la dirección `http://localhost:3000` en el navegador para acceder a Grafana, las credenciales por defecto son `admin` para el usuario y `prom-operator` para la contraseña.
 
-    ```sh
-    pip3 install virtualenv
-    ```
+Importamos el dashboard `./dashboard-grafana-aimar.json` y seleccionamos el namespace `fast-api` y el pod `my-app-fast-api-...`.
 
-    En caso de estar utilizando Linux y el comando anterior diera fallos se debe ejecutar el siguiente comando:
+![](/practica-copia/img/dashboard_grafana.png)
 
-    ```sh
-    sudo apt-get update && sudo apt-get install -y python3.8-venv
-    ```
+Podemos empezar a realizar diferentes peticiones al servidor de fastapi, es posible ver los endpoints disponibles y realizar peticiones a los mismos a través de la URL `http://localhost:8081/docs` utilizando swagger y así ver las peticiones en grafana.
 
-- `Docker` para poder arrancar el servidor implementado a través de un contenedor Docker, es posible descargarlo a [través de su página oficial](https://docs.docker.com/get-docker/).
+## Prueba de estrés
 
-## Ejecución de servidor
+Para la prueba de estrés podemos ejecutar los siguientes comandos:
+```
+export POD_NAME=$(kubectl get pods --namespace fast-api -l "app.kubernetes.io/name=fast-api-webapp,app.kubernetes.io/instance=my-app" -o jsonpath="{.items[0].metadata.name}")
+kubectl -n fast-api exec --stdin --tty $POD_NAME -c fast-api-webapp -- /bin/sh
+```
 
-### Ejecución directa con Python
+Una vez dentro del pod:
+```
+apk update && apk add git go
+```
 
-1. Instalación de un virtualenv, **realizarlo sólo en caso de no haberlo realizado previamente**:
-   1. Obtener la versión actual de Python instalada para crear posteriormente un virtualenv:
+```
+git clone https://github.com/jaeg/NodeWrecker.git
+cd NodeWrecker
+go build -o extress main.go
+```
 
-        ```sh
-        python3 --version
-        ```
+Empezaremos con la prueba de estrés con el siguiente comando:
+```
+./extress -abuse-memory -escalate -max-duration 10000000
+```
 
-        El comando anterior mostrará algo como lo mostrado a continuación:ç
+Podemos ver como se empieza a consumir más recursos en grafana y también por la terminal con:
+```
+kubectl -n fast-api get hpa -w
+```
 
-        ```sh
-            Python 3.8.13
-        ```
+Se debería recibir una notificación como la siguiente en el canal de Slack configurado para el envío de notificaciones sobre alarmas:
 
-   2. Crear de virtualenv en la raíz del directorio para poder instalar las librerías necesarias:
+  ```
+  [FIRING:1] Monitoring Event Notification
+  Alert: fastApiConsumingMoreThanRequest - critical
+  Description: Pod my-app-fast-api-webapp-585bf945cc-lvvpv is consuming more than limit
+  Graph: :gráfico_con_tendencia_ascendente: Runbook: <|:cuaderno_de_espiral:>
+  Details:
+  • alertname: fastApiConsumingMoreThanRequest
+  • pod: my-app-fast-api-webapp-585bf945cc-lvvpv
+  • prometheus: monitoring/prometheus-kube-prometheus-prometheus
+  • severity: critical
+  ```
 
-       - En caso de en el comando anterior haber obtenido `Python 3.8.*`
+El Horizontal Pod Autoscaler escalará el número de pods para mitigar este pico y por lo tanto pasado un tiempo debería recibirse una notificación de que la alarma se ha mitigado, tal y como se puede ver en la siguiente captura.
 
-            ```sh
-            python3.8 -m venv venv
-            ```
+## Terminar
 
-       - En caso de en el comando anterior haber obtenido `Python 3.9.*`:
+Parar el cluster de minikube creado para esta parte del laboratorio:
 
-           ```sh
-           python3.9 -m venv venv
-           ```
-
-2. Activar el virtualenv creado en el directorio `venv` en el paso anterior:
-
-     ```sh
-     source venv/bin/activate
-     ```
-
-3. Instalar las librerías necesarias de Python, recogidas en el fichero `requirements.txt`, **sólo en caso de no haber realizado este paso previamente**. Es posible instalarlas a través del siguiente comando:
-
-    ```sh
-    pip3 install -r requirements.txt
-    ```
-
-4. Ejecución del código para arrancar el servidor:
-
-    ```sh
-    python3 src/app.py
-    ```
-
-5. La ejecución del comando anterior debería mostrar algo como lo siguiente:
-
-    ```sh
-    [2022-04-16 09:44:22 +0000] [1] [INFO] Running on http://0.0.0.0:8081 (CTRL + C to quit)
-    ```
-
-### Ejecución a través de un contenedor Docker
-
-1. Crear una imagen Docker con el código necesario para arrancar el servidor:
-
-    ```sh
-    docker build -t simple-server:0.0.1 .
-    ```
-
-2. Arrancar la imagen construida en el paso anterior mapeando los puertos utilizados por el servidor de FastAPI y el cliente de prometheus:
-
-    ```sh
-    docker run -d -p 8000:8000 -p 8081:8081 --name simple-server simple-server:0.0.1
-    ```
-
-3. Obtener los logs del contenedor creado en el paso anterior:
-
-    ```sh
-    docker logs -f simple-server
-    ```
-
-4. La ejecución del comando anterior debería mostrar algo como lo siguiente:
-
-    ```sh
-    [2022-04-16 09:44:22 +0000] [1] [INFO] Running on http://0.0.0.0:8081 (CTRL + C to quit)
-    ```
-
-## Comprobación de endpoints de servidor y métricas
-
-Una vez arrancado el servidor, utilizando cualquier de las formas expuestas en los apartados anteriores, es posible probar las funcionalidades implementadas por el servidor:
-
-- Comprobación de servidor FastAPI, a través de llamadas a los diferentes endpoints:
-
-  - Realizar una petición al endpoint `/`
-
-      ```sh
-      curl -X 'GET' \
-      'http://0.0.0.0:8081/' \
-      -H 'accept: application/json'
-      ```
-
-      Debería devolver la siguiente respuesta:
-
-      ```json
-      {"message":"Hello World"}
-      ```
-
-  - Realizar una petición al endpoint `/health`
-
-      ```sh
-      curl -X 'GET' \
-      'http://0.0.0.0:8081/health' \
-      -H 'accept: application/json' -v
-      ```
-
-      Debería devolver la siguiente respuesta.
-
-      ```json
-      {"health": "ok"}
-      ```
-
-- Comprobación de registro de métricas, si se accede a la URL `http://0.0.0.0:8000` se podrán ver todas las métricas con los valores actuales en ese momento:
-
-  - Realizar varias llamadas al endpoint `/` y ver como el contador utilizado para registrar las llamadas a ese endpoint, `main_requests_total` ha aumentado, se debería ver algo como lo mostrado a continuación:
-
-    ```sh
-    # TYPE main_requests_total counter
-    main_requests_total 4.0
-    ```
-
-  - Realizar varias llamadas al endpoint `/health` y ver como el contador utilizado para registrar las llamadas a ese endpoint, `healthcheck_requests_total` ha aumentado, se debería ver algo como lo mostrado a continuación:
-
-    ```sh
-    # TYPE healthcheck_requests_total counter
-    healthcheck_requests_total 26.0
-    ```
-
-  - También se ha credo un contador para el número total de llamadas al servidor `server_requests_total`, por lo que este valor debería ser la suma de los dos anteriores, tal y como se puede ver a continuación:
-
-    ```sh
-    # TYPE server_requests_total counter
-    server_requests_total 30.0
-    ```
-
-## Tests
-
-Se ha implementado tests unitarios para probar el servidor FastAPI, estos están disponibles en el archivo `src/tests/app_test.py`.
-
-Es posible ejecutar los tests de diferentes formas:
-
-- Ejecución de todos los tests:
-
-    ```sh
-    pytest
-    ```
-
-- Ejecución de todos los tests y mostrar cobertura:
-
-    ```sh
-    pytest --cov
-    ```
-
-- Ejecución de todos los tests y generación de report de cobertura:
-
-    ```sh
-    pytest --cov --cov-report=html
-    ```
-
-## Practica a realizar
-
-A partir del ejemplo inicial descrito en los apartados anteriores es necesario realizar una serie de mejoras:
-
-Los requirimientos son los siguientes:
-
-- Añadir por lo menos un nuevo endpoint a los existentes `/` y `/health`, un ejemplo sería `/bye` que devolvería `{"msg": "Bye Bye"}`, para ello será necesario añadirlo en el fichero [src/application/app.py](./src/application/app.py)
-
-- Creación de tests unitarios para el nuevo endpoint añadido, para ello será necesario modificar el [fichero de tests](./src/tests/app_test.py)
-
-- Opcionalmente creación de helm chart para desplegar la aplicación en Kubernetes, se dispone de un ejemplo de ello en el laboratorio realizado en la clase 3
-
-- Creación de pipelines de CI/CD en cualquier plataforma (Github Actions, Jenkins, etc) que cuenten por lo menos con las siguientes fases:
-
-  - Testing: tests unitarios con cobertura. Se dispone de un [ejemplo con Github Actions en el repositorio actual](./.github/workflows/test.yaml)
-
-  - Build & Push: creación de imagen docker y push de la misma a cualquier registry válido que utilice alguna estrategia de release para los tags de las vistas en clase, se recomienda GHCR ya incluido en los repositorios de Github. Se dispone de un [ejemplo con Github Actions en el repositorio actual](./.github/workflows/release.yaml)
-
-- Configuración de monitorización y alertas:
-
-  - Configurar monitorización mediante prometheus en los nuevos endpoints añadidos, por lo menos con la siguiente configuración:
-    - Contador cada vez que se pasa por el/los nuevo/s endpoint/s, tal y como se ha realizado para los endpoints implementados inicialmente
-
-  - Desplegar prometheus a través de Kubernetes mediante minikube y configurar alert-manager para por lo menos las siguientes alarmas, tal y como se ha realizado en el laboratorio del día 3 mediante el chart `kube-prometheus-stack`:
-    - Uso de CPU de un contenedor mayor al del límite configurado, se puede utilizar como base el ejemplo utilizado en el laboratorio 3 para mandar alarmas cuando el contenedor de la aplicación `fast-api` consumía más del asignado mediante request
-
-  - Las alarmas configuradas deberán tener severity high o critical
-
-  - Crear canal en slack `<nombreAlumno>-prometheus-alarms` y configurar webhook entrante para envío de alertas con alert manager
-
-  - Alert manager estará configurado para lo siguiente:
-    - Mandar un mensaje a Slack en el canal configurado en el paso anterior con las alertas con label "severity" y "critical"
-    - Deberán enviarse tanto alarmas como recuperación de las mismas
-    - Habrá una plantilla configurada para el envío de alarmas
-
-    Para poder comprobar si esta parte funciona se recomienda realizar una prueba de estres, como la realizada en el laboratorio 3 a partir del paso 8.
-
-  - Creación de un dashboard de Grafana, con por lo menos lo siguiente:
-    - Número de llamadas a los endpoints
-    - Número de veces que la aplicación ha arrancado
-
-## Entregables
-
-Se deberá entregar mediante un repositorio realizado a partir del original lo siguiente:
-
-- Código de la aplicación y los tests modificados
-- Ficheros para CI/CD configurados y ejemplos de ejecución válidos
-- Ficheros para despliegue y configuración de prometheus de todo lo relacionado con este, así como el dashboard creado exportado a `JSON` para poder reproducirlo
-- `README.md` donde se explique como se ha abordado cada uno de los puntos requeridos en el apartado anterior, con ejemplos prácticos y guía para poder reproducir cada uno de ellos
+```
+minikube -p monitoring-demo stop
+```
